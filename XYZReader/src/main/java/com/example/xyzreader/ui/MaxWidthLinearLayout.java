@@ -24,7 +24,8 @@ import android.widget.LinearLayout;
 /**
  * A simple {@link LinearLayout} subclass that has a maxWidth
  */
-public class MaxWidthLinearLayout extends LinearLayout {
+public final class MaxWidthLinearLayout extends LinearLayout {
+
     private static final int[] ATTRS = {
             android.R.attr.maxWidth
     };
@@ -62,5 +63,17 @@ public class MaxWidthLinearLayout extends LinearLayout {
         int newSpecWidth = Math.min(MeasureSpec.getSize(widthMeasureSpec), mMaxWidth);
         widthMeasureSpec = MeasureSpec.makeMeasureSpec(newSpecWidth, MeasureSpec.getMode(widthMeasureSpec));
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    /**
+     * The view has a size too large for the maxWidth attribute, which causes an error
+     * when we apply transitions.
+     * This method will prevent the use of GPU for transitions.
+     * <p>
+     * Reference: @see "https://discussions.udacity.com/t/when-i-add-frame-layout-on-line-13-my-app-crashes/668463/6"
+     */
+    @Override
+    public boolean hasOverlappingRendering() {
+        return false;
     }
 }

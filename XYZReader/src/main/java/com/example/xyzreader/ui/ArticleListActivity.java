@@ -1,36 +1,50 @@
 package com.example.xyzreader.ui;
 
-import android.app.LoaderManager;
+import android.annotation.TargetApi;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.Loader;
+import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.os.Build;
 import android.os.Bundle;
-import android.support.v4.widget.SwipeRefreshLayout;
-import android.support.v7.app.ActionBarActivity;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.StaggeredGridLayoutManager;
-import android.support.v7.widget.Toolbar;
-import android.text.Html;
-import android.text.format.DateUtils;
-import android.util.Log;
-import android.util.TypedValue;
-import android.view.MenuItem;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.ActivityOptionsCompat;
+import androidx.core.app.SharedElementCallback;
+import androidx.loader.app.LoaderManager;
+import androidx.loader.content.Loader;
+import androidx.preference.PreferenceManager;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.StaggeredGridLayoutManager;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.TextView;
+import android.view.ViewTreeObserver;
+import android.view.animation.AnimationUtils;
+import android.view.animation.LayoutAnimationController;
 
 import com.example.xyzreader.R;
+import com.example.xyzreader.adapter.ArticleListAdapter;
 import com.example.xyzreader.data.ArticleLoader;
 import com.example.xyzreader.data.ItemsContract;
 import com.example.xyzreader.data.UpdaterService;
+import com.example.xyzreader.util.Constants;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.GregorianCalendar;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import static com.example.xyzreader.util.Constants.CUBE;
+import static com.example.xyzreader.util.Constants.DEPTH;
+import static com.example.xyzreader.util.Constants.EXTRA_LARGE;
+import static com.example.xyzreader.util.Constants.LARGE;
+import static com.example.xyzreader.util.Constants.SMALL;
+import static com.example.xyzreader.util.Constants.ZOOM;
 
 /**
  * An activity representing a list of Articles. This activity has different presentations for
@@ -38,49 +52,167 @@ import java.util.GregorianCalendar;
  * touched, lead to a {@link ArticleDetailActivity} representing item details. On tablets, the
  * activity presents a grid of items as cards.
  */
-public class ArticleListActivity extends ActionBarActivity implements
-        LoaderManager.LoaderCallbacks<Cursor> {
+public class ArticleListActivity extends AppCompatActivity implements LoaderManager.LoaderCallbacks<Cursor>, SharedPreferences.OnSharedPreferenceChangeListener, ArticleListAdapter.OnClickItemListener {
 
-    private static final String TAG = ArticleListActivity.class.toString();
+    public static final String EXTRA_STARTING_POSITION = "extra_starting_position";
+    public static final String EXTRA_CURRENT_POSITION = "extra_current_position";
+    public static final String EXTRA_PAGE_TRANSFORMATION = "extra_page_transformation";
+    public static final String EXTRA_TEXT_SIZE = "extra_text_size";
+
+    private String mPageTransformerStr;
+    private String mTextSizeStr;
+
+    private Bundle mReenterState;
+
     private Toolbar mToolbar;
     private SwipeRefreshLayout mSwipeRefreshLayout;
     private RecyclerView mRecyclerView;
 
-    private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.sss");
-    // Use default locale format
-    private SimpleDateFormat outputFormat = new SimpleDateFormat();
-    // Most time functions can only handle 1902 - 2037
-    private GregorianCalendar START_OF_EPOCH = new GregorianCalendar(2,1,1);
+    private ArticleListAdapter adapter;
+
+    private boolean mIsRefreshing = false;
+
+    private final SharedElementCallback mCallback = new SharedElementCallback() {
+
+        @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+        @Override
+        public void onMapSharedElements(List<String> names, Map<String, View> sharedElements) {
+            if (mReenterState != null) {
+                int startingPosition = mReenterState.getInt(EXTRA_STARTING_POSITION);
+                int currentPosition = mReenterState.getInt(EXTRA_CURRENT_POSITION);
+                if (startingPosition != currentPosition) {
+                    String newTransitionName = "transition_photo" + currentPosition;
+                    View newSharedElement = mRecyclerView.findViewWithTag(newTransitionName);
+                    if (newSharedElement != null) {
+                        names.clear();
+                        names.add(newTransitionName);
+                        sharedElements.clear();
+                        sharedElements.put(newTransitionName, newSharedElement);
+                    }
+                }
+
+                mReenterState = null;
+            } else {
+                View navigationBar = findViewById(android.R.id.navigationBarBackground);
+                View statusBar = findViewById(android.R.id.statusBarBackground);
+                if (navigationBar != null) {
+                    names.add(navigationBar.getTransitionName());
+                    sharedElements.put(navigationBar.getTransitionName(), navigationBar);
+                }
+                if (statusBar != null) {
+                    names.add(statusBar.getTransitionName());
+                    sharedElements.put(statusBar.getTransitionName(), statusBar);
+                }
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_article_list);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            setExitSharedElementCallback(mCallback);
+        }
 
-        mToolbar = (Toolbar) findViewById(R.id.toolbar);
+        mToolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(mToolbar);
+        setSwipeRefreshLayout();
 
-
-        final View toolbarContainerView = findViewById(R.id.toolbar_container);
-
-        mSwipeRefreshLayout = (SwipeRefreshLayout) findViewById(R.id.swipe_refresh_layout);
-
-        mRecyclerView = (RecyclerView) findViewById(R.id.recycler_view);
-        getLoaderManager().initLoader(0, null, this);
+        mRecyclerView = findViewById(R.id.recycler_view);
+        getSupportLoaderManager().initLoader(Constants.XYZ_LOADER_ID, null, this);
 
         if (savedInstanceState == null) {
             refresh();
         }
+
+        mPageTransformerStr = getPreferredPageTransformationStr();
+        mTextSizeStr = getPreferredTextSizeStr();
+
+        PreferenceManager.getDefaultSharedPreferences(this)
+                .registerOnSharedPreferenceChangeListener(this);
+    }
+
+    private String getPreferredPageTransformationStr() {
+
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        String keyForPageAnimation = "page_animation";
+        String defaultPageAnimation = "page_animation_default";
+        return prefs.getString(keyForPageAnimation, defaultPageAnimation);
+    }
+
+    private String getPreferredTextSizeStr() {
+
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        String keyForTextSize = "text_size_key";
+        String defaultTextSize = "text_size_default";
+        return prefs.getString(keyForTextSize, defaultTextSize);
+    }
+
+    private void setSwipeRefreshLayout() {
+        mSwipeRefreshLayout = findViewById(R.id.swipe_refresh_layout);
+        mSwipeRefreshLayout.setColorSchemeColors(
+                getResources().getColor(R.color.swipeColor1),
+                getResources().getColor(R.color.swipeColor2),
+                getResources().getColor(R.color.swipeColor3));
+
+        mSwipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+            @Override
+            public void onRefresh() {
+                refresh();
+                runLayoutAnimation(mRecyclerView);
+            }
+        });
     }
 
     private void refresh() {
         startService(new Intent(this, UpdaterService.class));
     }
 
+    private void runLayoutAnimation(RecyclerView recyclerView) {
+        Context context = recyclerView.getContext();
+        LayoutAnimationController controller =
+                AnimationUtils.loadLayoutAnimation(context, R.anim.layout_animation_from_bottom);
+        recyclerView.setLayoutAnimation(controller);
+        Objects.requireNonNull(recyclerView.getAdapter()).notifyDataSetChanged();
+        recyclerView.scheduleLayoutAnimation();
+    }
+
+    @Override
+    public void onActivityReenter(int resultCode, Intent data) {
+        super.onActivityReenter(resultCode, data);
+        mReenterState = new Bundle(data.getExtras());
+        int startingPosition = mReenterState.getInt(EXTRA_STARTING_POSITION);
+        int currentPosition = mReenterState.getInt(EXTRA_CURRENT_POSITION);
+        if (startingPosition != currentPosition) {
+            mRecyclerView.scrollToPosition(currentPosition);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            ActivityCompat.postponeEnterTransition(this);
+        }
+        scheduleStartPostponedTransition(mRecyclerView);
+    }
+
+    private void scheduleStartPostponedTransition(final View sharedElement) {
+        sharedElement.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+
+            @Override
+            public boolean onPreDraw() {
+                sharedElement.getViewTreeObserver().removeOnPreDrawListener(this);
+                mRecyclerView.requestLayout();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    ActivityCompat.startPostponedEnterTransition(ArticleListActivity.this);
+                }
+                return true;
+            }
+        });
+    }
+
     @Override
     protected void onStart() {
         super.onStart();
-        registerReceiver(mRefreshingReceiver,
-                new IntentFilter(UpdaterService.BROADCAST_ACTION_STATE_CHANGE));
+        registerReceiver(mRefreshingReceiver, new IntentFilter(UpdaterService.BROADCAST_ACTION_STATE_CHANGE));
     }
 
     @Override
@@ -89,9 +221,14 @@ public class ArticleListActivity extends ActionBarActivity implements
         unregisterReceiver(mRefreshingReceiver);
     }
 
-    private boolean mIsRefreshing = false;
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        PreferenceManager.getDefaultSharedPreferences(this).unregisterOnSharedPreferenceChangeListener(this);
+    }
 
     private BroadcastReceiver mRefreshingReceiver = new BroadcastReceiver() {
+
         @Override
         public void onReceive(Context context, Intent intent) {
             if (UpdaterService.BROADCAST_ACTION_STATE_CHANGE.equals(intent.getAction())) {
@@ -105,107 +242,82 @@ public class ArticleListActivity extends ActionBarActivity implements
         mSwipeRefreshLayout.setRefreshing(mIsRefreshing);
     }
 
+    @NonNull
     @Override
-    public Loader<Cursor> onCreateLoader(int i, Bundle bundle) {
+    public androidx.loader.content.Loader<Cursor> onCreateLoader(int i, Bundle bundle) {
         return ArticleLoader.newAllArticlesInstance(this);
     }
 
     @Override
-    public void onLoadFinished(Loader<Cursor> cursorLoader, Cursor cursor) {
-        Adapter adapter = new Adapter(cursor);
+    public void onLoadFinished(@NonNull androidx.loader.content.Loader<Cursor> cursorLoader, Cursor cursor) {
+
+        adapter = new ArticleListAdapter(cursor, this, mTextSizeStr);
         adapter.setHasStableIds(true);
         mRecyclerView.setAdapter(adapter);
         int columnCount = getResources().getInteger(R.integer.list_column_count);
-        StaggeredGridLayoutManager sglm =
-                new StaggeredGridLayoutManager(columnCount, StaggeredGridLayoutManager.VERTICAL);
+        StaggeredGridLayoutManager sglm = new StaggeredGridLayoutManager(columnCount, StaggeredGridLayoutManager.VERTICAL);
         mRecyclerView.setLayoutManager(sglm);
     }
 
     @Override
-    public void onLoaderReset(Loader<Cursor> loader) {
+    public void onLoaderReset(@NonNull Loader<Cursor> loader) {
         mRecyclerView.setAdapter(null);
     }
 
-    private class Adapter extends RecyclerView.Adapter<ViewHolder> {
-        private Cursor mCursor;
-
-        public Adapter(Cursor cursor) {
-            mCursor = cursor;
-        }
-
-        @Override
-        public long getItemId(int position) {
-            mCursor.moveToPosition(position);
-            return mCursor.getLong(ArticleLoader.Query._ID);
-        }
-
-        @Override
-        public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            View view = getLayoutInflater().inflate(R.layout.list_item_article, parent, false);
-            final ViewHolder vh = new ViewHolder(view);
-            view.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    startActivity(new Intent(Intent.ACTION_VIEW,
-                            ItemsContract.Items.buildItemUri(getItemId(vh.getAdapterPosition()))));
-                }
-            });
-            return vh;
-        }
-
-        private Date parsePublishedDate() {
-            try {
-                String date = mCursor.getString(ArticleLoader.Query.PUBLISHED_DATE);
-                return dateFormat.parse(date);
-            } catch (ParseException ex) {
-                Log.e(TAG, ex.getMessage());
-                Log.i(TAG, "passing today's date");
-                return new Date();
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+        if (key.equals("page_animation")) {
+            String pageAnimation = sharedPreferences.getString(key, "page_animation_default");
+            switch (pageAnimation) {
+                case ZOOM:
+                    mPageTransformerStr = "page_animation_zoom";
+                    break;
+                case DEPTH:
+                    mPageTransformerStr = "page_animation_depth";
+                    break;
+                case CUBE:
+                    mPageTransformerStr = "page_animation_cube";
+                    break;
+                default:
+                    mPageTransformerStr = "page_animation_pop";
             }
-        }
 
-        @Override
-        public void onBindViewHolder(ViewHolder holder, int position) {
-            mCursor.moveToPosition(position);
-            holder.titleView.setText(mCursor.getString(ArticleLoader.Query.TITLE));
-            Date publishedDate = parsePublishedDate();
-            if (!publishedDate.before(START_OF_EPOCH.getTime())) {
-
-                holder.subtitleView.setText(Html.fromHtml(
-                        DateUtils.getRelativeTimeSpanString(
-                                publishedDate.getTime(),
-                                System.currentTimeMillis(), DateUtils.HOUR_IN_MILLIS,
-                                DateUtils.FORMAT_ABBREV_ALL).toString()
-                                + "<br/>" + " by "
-                                + mCursor.getString(ArticleLoader.Query.AUTHOR)));
-            } else {
-                holder.subtitleView.setText(Html.fromHtml(
-                        outputFormat.format(publishedDate)
-                        + "<br/>" + " by "
-                        + mCursor.getString(ArticleLoader.Query.AUTHOR)));
+        } else if (key.equals("text_size_key")) {
+            String textSize = sharedPreferences.getString(key, "text_size_default");
+            switch (textSize) {
+                case SMALL:
+                    mTextSizeStr = "text_size_small";
+                    break;
+                case LARGE:
+                    mTextSizeStr = "text_size_large";
+                    break;
+                case EXTRA_LARGE:
+                    mTextSizeStr = "text_size_extra_large";
+                    break;
+                default:
+                    mTextSizeStr = "text_size_medium";
             }
-            holder.thumbnailView.setImageUrl(
-                    mCursor.getString(ArticleLoader.Query.THUMB_URL),
-                    ImageLoaderHelper.getInstance(ArticleListActivity.this).getImageLoader());
-            holder.thumbnailView.setAspectRatio(mCursor.getFloat(ArticleLoader.Query.ASPECT_RATIO));
-        }
-
-        @Override
-        public int getItemCount() {
-            return mCursor.getCount();
         }
     }
 
-    public static class ViewHolder extends RecyclerView.ViewHolder {
-        public DynamicHeightNetworkImageView thumbnailView;
-        public TextView titleView;
-        public TextView subtitleView;
+    @Override
+    public void onClick(int position, DynamicHeightNetworkImageView thumbnailView) {
 
-        public ViewHolder(View view) {
-            super(view);
-            thumbnailView = (DynamicHeightNetworkImageView) view.findViewById(R.id.thumbnail);
-            titleView = (TextView) view.findViewById(R.id.article_title);
-            subtitleView = (TextView) view.findViewById(R.id.article_subtitle);
+        Intent intent = new Intent(Intent.ACTION_VIEW, ItemsContract.Items.buildItemUri(adapter.getItemId(position)));
+        intent.putExtra(EXTRA_STARTING_POSITION, position);
+        intent.putExtra(EXTRA_PAGE_TRANSFORMATION, mPageTransformerStr);
+        intent.putExtra(EXTRA_TEXT_SIZE, mTextSizeStr);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            String transitionName = thumbnailView.getTransitionName();
+            Bundle bundle = ActivityOptionsCompat.makeSceneTransitionAnimation(
+                    ArticleListActivity.this,
+                    thumbnailView,
+                    transitionName
+            ).toBundle();
+            startActivity(intent, bundle);
+        } else {
+            startActivity(intent);
         }
     }
 }

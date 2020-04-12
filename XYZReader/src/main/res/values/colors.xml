@@ -18,8 +18,19 @@
 <resources>
     <color name="photo_placeholder">#ccc</color>
 
-    <color name="theme_primary">#04561A</color>
-    <color name="theme_primary_dark">#04561A</color>
+    <color name="colorPrimary">#651FFF</color>
+    <color name="colorPrimaryDark">#6200EA</color>
+    <color name="colorAccent">#7C4DFF</color>
+    <color name="primaryTextColor">#212121</color>
+    <color name="secondaryTextColor">#757575</color>
+
+    <color name="swipeColor1">#F50057</color>
+    <color name="swipeColor2">#304FFE</color>
+    <color name="swipeColor3">#00C853</color>
+    <color name="detailTint">#75ff9800</color>
+    <color name="colorWhite">#ffffff</color>
+    <color name="colorBlack">#000000</color>
     <color name="theme_accent">#04561A</color>
     <color name="ltgray">#ffe0e0e0</color>
+
 </resources>
